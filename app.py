@@ -19,24 +19,42 @@ SERVICE_TOKEN = os.environ["SERVICE_TOKEN"]   # shared secret for app-level auth
 SERVICE_B_URL = os.environ["SERVICE_B_URL"]   # vanity URL of Service B
 VERIFY_SSL    = os.environ.get("VERIFY_SSL", "true").lower() != "false"
 
+# Domino Secure App Identity endpoint — available inside every Domino app pod when
+# SecureIdentityPropagationToAppsEnabled is ON.  Returns a short-lived JWT that the
+# Domino proxy accepts as Bearer auth for calls to other apps (deep-linking mode).
+_IDENTITY_TOKEN_URL = "http://localhost:8899/access-token"
+
+
+def get_proxy_headers() -> dict:
+    """
+    Return the headers needed to authenticate outbound calls through the Domino proxy.
+
+    Two modes (detected at runtime):
+      1. SecureIdentityPropagation ON  → fetch JWT from localhost:8899 and send as Bearer.
+         The proxy validates the JWT and forwards the request.
+      2. SecureIdentityPropagation OFF → fall back to X-Domino-Api-Key (works with Domino
+         6.2+ deep-linking where the proxy accepts API keys for direct-proxy apps).
+    """
+    try:
+        r = requests.get(_IDENTITY_TOKEN_URL, timeout=5)
+        r.raise_for_status()
+        token = r.text.strip()
+        if token:
+            return {"Authorization": f"Bearer {token}"}
+    except Exception:
+        pass
+    # Fallback: API-key auth (Domino 6.2+ without SecureIdentityPropagation)
+    return {"X-Domino-Api-Key": SERVICE_TOKEN}
+
 
 def verify_token(x_service_token: Annotated[Optional[str], Header()] = None):
-    """Validate the shared service token on incoming requests."""
     if x_service_token != SERVICE_TOKEN:
         raise HTTPException(status_code=401, detail="Invalid or missing X-Service-Token")
 
 
 def call_service(url: str, path: str) -> dict:
-    """
-    Make an authenticated GET request to another Domino App.
-
-    X-Domino-Api-Key authenticates against the Domino reverse proxy.
-    X-Service-Token is the app-level shared secret validated by the receiving service.
-    We do NOT use Authorization: Bearer here — Domino 6.1's proxy returns 500 when
-    it receives a Bearer token that is not a valid JWT.
-    """
     headers = {
-        "X-Domino-Api-Key": SERVICE_TOKEN,
+        **get_proxy_headers(),
         "X-Service-Token": SERVICE_TOKEN,
     }
     response = requests.get(f"{url}{path}", headers=headers, timeout=10, verify=VERIFY_SSL)
