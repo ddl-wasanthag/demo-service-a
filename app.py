@@ -10,7 +10,7 @@ GET /hello     calls Service B, returns the full nested chain response
 import os
 import requests
 import uvicorn
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, Query
 from typing import Annotated, Optional
 
 app = FastAPI(title="Service A")
@@ -47,8 +47,10 @@ def get_proxy_headers() -> dict:
     return {"X-Domino-Api-Key": SERVICE_TOKEN}
 
 
-def verify_token(x_service_token: Annotated[Optional[str], Header()] = None):
-    if x_service_token != SERVICE_TOKEN:
+def verify_token(x_service_token: Annotated[Optional[str], Header()] = None,
+                 token: Annotated[Optional[str], Query()] = None):
+    """Accept token via X-Service-Token header or ?token= query param (browser testing)."""
+    if x_service_token != SERVICE_TOKEN and token != SERVICE_TOKEN:
         raise HTTPException(status_code=401, detail="Invalid or missing X-Service-Token")
 
 
@@ -68,8 +70,9 @@ def root():
 
 
 @app.get("/hello")
-def hello(x_service_token: Annotated[Optional[str], Header()] = None):
-    verify_token(x_service_token)
+def hello(x_service_token: Annotated[Optional[str], Header()] = None,
+          token: Annotated[Optional[str], Query()] = None):
+    verify_token(x_service_token, token)
     try:
         b_response = call_service(SERVICE_B_URL, "/hello")
     except Exception as e:
